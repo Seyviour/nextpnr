@@ -166,9 +166,11 @@ struct GowinPacker
     {
         BelId bel = ctx->getBelByName(IdStringList::parse(ctx, ci.attrs.at(id_BEL).as_string()));
         if (bel == BelId()) {
+            log_info("\nhere2");
             log_error("No bel named %s\n", IdStringList::parse(ctx, ci.attrs.at(id_BEL).as_string()).str(ctx).c_str());
         }
         if (!ctx->checkBelAvail(bel)) {
+            log_info("\nhere3");
             log_error("Can't place %s at %s because it's already taken by %s\n", ctx->nameOf(&ci), ctx->nameOfBel(bel),
                       ctx->nameOf(ctx->getBoundBelCell(bel)));
         }
@@ -200,6 +202,8 @@ struct GowinPacker
             make_iob_nets(ci);
         }
     }
+
+
 
     // ===================================
     // Differential IO
@@ -2643,6 +2647,52 @@ struct GowinPacker
         }
     }
 
+    // ===================================
+    // HCLK -- only CLKDIV for now
+    // ===================================
+    void pack_hclk(void)
+    {
+        log_info("Pack_HCLK...\n");
+        for (auto &cell: ctx->cells) {
+            auto ci = cell.second.get();
+
+            if (is_clkdiv(ci)){
+                log_info("here1"); 
+
+                // continue;
+                // log_info(ci->params.at(id_DIV_MODE).c_str());
+                IdString dummy_buf_name = ctx->idf("%s_DUMMY_CLKDIV_OUT_BUF", ci->name.c_str(ctx));
+                ctx->createCell(dummy_buf_name, id_DUMMY_CLKDIV_CLKOUT_BUF);
+                CellInfo *dummy_buf_ci = ctx->cells.at(dummy_buf_name).get();
+                dummy_buf_ci->addInput(id_CLKIN);
+                dummy_buf_ci->addOutput(id_CLKOUT); 
+                
+                ci->movePortTo(id_CLKOUT, dummy_buf_ci, id_CLKOUT);
+                ci->disconnectPort(id_CLKOUT);
+                ci->connectPorts(id_CLKOUT, dummy_buf_ci, id_CLKIN);
+
+                // Constrain CLKDIV
+                log_info("constraining clkdiv\n"); 
+                if (!(ci->attrs.count(id_BEL) == 0)) {
+                    BelId dummy_bel = ctx->getBelByName(IdStringList::parse(ctx, ci->attrs.at(id_BEL).as_string()));
+                
+                    if (dummy_bel == BelId()) {
+                        log_error("No bel named %s\n", IdStringList::parse(ctx, ci->attrs.at(id_BEL).as_string()).str(ctx).c_str());
+                    }
+
+                    if (!ctx->checkBelAvail(dummy_bel)) {
+                        log_error("Can't place %s at %s because it's already taken by %s\n", ctx->nameOf(ci), ctx->nameOfBel(dummy_bel),
+                                ctx->nameOf(ctx->getBoundBelCell(dummy_bel)));
+                    }
+
+                    ci->unsetAttr(id_BEL);
+                    ctx->bindBel(dummy_bel, dummy_buf_ci, PlaceStrength::STRENGTH_LOCKED);
+                    // return bel;
+                }
+            }
+        }
+    }
+
     // =========================================
     // Create entry points to the clock system
     // =========================================
@@ -2681,6 +2731,9 @@ struct GowinPacker
         handle_constants();
         pack_iobs();
         ctx->check();
+
+        pack_hclk();
+        ctx->check(); 
 
         pack_diff_iobs();
         ctx->check();
