@@ -90,6 +90,7 @@ struct GowinImpl : HimbaechelAPI
     // bel placement validation
     bool slice_valid(int x, int y, int z) const;
     bool dsp_valid(Loc l, IdString bel_type, bool explain_invalid) const;
+    bool hclk_valid(Loc l, IdString bel_type) const; 
 };
 
 struct GowinArch : HimbaechelArch
@@ -256,6 +257,8 @@ void GowinImpl::adjust_dsp_pin_mapping(void)
     }
 }
 
+
+
 void GowinImpl::prePlace() { assign_cell_info(); }
 void GowinImpl::postPlace()
 {
@@ -300,7 +303,8 @@ void GowinImpl::postRoute()
                         // is needed to get Pip from a Wire
                         PipId up_pip = h_net->wires.at(ctx->getNetinfoSinkWire(h_net, user, 0)).pip;
                         IdString up_wire_name = ctx->getWireName(ctx->getPipSrcWire(up_pip))[1];
-                        if (up_wire_name.in(id_HCLK_OUT0, id_HCLK_OUT1, id_HCLK_OUT2, id_HCLK_OUT3)) {
+                        // if (up_wire_name.in(id_HCLK_OUT0, id_HCLK_OUT1, id_HCLK_OUT2, id_HCLK_OUT3)) {
+                        if (up_wire_name.in(id_HCLK_FCLK0, id_HCLK_FCLK1, id_HCLK_FCLK2, id_HCLK_FCLK3)) {
                             user.cell->setAttr(id_IOLOGIC_FCLK, Property(up_wire_name.str(ctx)));
                             if (ctx->debug) {
                                 log_info("set IOLOGIC_FCLK to %s\n", up_wire_name.c_str(ctx));
@@ -345,6 +349,8 @@ bool GowinImpl::isBelLocationValid(BelId bel, bool explain_invalid) const
     case ID_MULT36X36:       /* fall-through */
     case ID_ALU54D:
         return dsp_valid(l, bel_type, explain_invalid);
+    case ID_CLKDIV:
+        return hclk_valid(l, bel_type); 
     }
     return true;
 }
@@ -410,6 +416,9 @@ bool GowinImpl::isValidBelForCellType(IdString cell_type, BelId bel) const
     if (bel_type == id_BSRAM) {
         return type_is_bsram(cell_type);
     }
+    if (bel_type == id_CLKDIV) {
+        return type_is_clkdiv(cell_type); 
+    }
     if (bel_type == id_GND) {
         return cell_type == id_GOWIN_GND;
     }
@@ -465,20 +474,26 @@ void GowinImpl::assign_cell_info()
     }
 }
 
+
+
+
 // DFFs must be same type or compatible
 inline bool incompatible_ffs(const CellInfo *ff, const CellInfo *adj_ff)
 {
-    return ff->type != adj_ff->type &&
-           ((ff->type == id_DFFS && adj_ff->type != id_DFFR) || (ff->type == id_DFFR && adj_ff->type != id_DFFS) ||
-            (ff->type == id_DFFSE && adj_ff->type != id_DFFRE) || (ff->type == id_DFFRE && adj_ff->type != id_DFFSE) ||
-            (ff->type == id_DFFP && adj_ff->type != id_DFFC) || (ff->type == id_DFFC && adj_ff->type != id_DFFP) ||
-            (ff->type == id_DFFPE && adj_ff->type != id_DFFCE) || (ff->type == id_DFFCE && adj_ff->type != id_DFFPE) ||
-            (ff->type == id_DFFNS && adj_ff->type != id_DFFNR) || (ff->type == id_DFFNR && adj_ff->type != id_DFFNS) ||
-            (ff->type == id_DFFNSE && adj_ff->type != id_DFFNRE) ||
-            (ff->type == id_DFFNRE && adj_ff->type != id_DFFNSE) ||
-            (ff->type == id_DFFNP && adj_ff->type != id_DFFNC) || (ff->type == id_DFFNC && adj_ff->type != id_DFFNP) ||
-            (ff->type == id_DFFNPE && adj_ff->type != id_DFFNCE) ||
-            (ff->type == id_DFFNCE && adj_ff->type != id_DFFNPE));
+    auto ff_type = ff->type;
+    auto adj_ff_type = adj_ff->type;
+
+    return ff_type != adj_ff_type &&
+        ((ff_type == id_DFFS && adj_ff_type != id_DFFR) || (ff_type == id_DFFR && adj_ff_type != id_DFFS) ||
+        (ff_type == id_DFFSE && adj_ff_type != id_DFFRE) || (ff_type == id_DFFRE && adj_ff_type != id_DFFSE) ||
+        (ff_type == id_DFFP && adj_ff_type != id_DFFC) || (ff_type == id_DFFC && adj_ff_type != id_DFFP) ||
+        (ff_type == id_DFFPE && adj_ff_type != id_DFFCE) || (ff_type == id_DFFCE && adj_ff_type != id_DFFPE) ||
+        (ff_type == id_DFFNS && adj_ff_type != id_DFFNR) || (ff_type == id_DFFNR && adj_ff_type != id_DFFNS) ||
+        (ff_type == id_DFFNSE && adj_ff_type != id_DFFNRE) ||
+        (ff_type == id_DFFNRE && adj_ff_type != id_DFFNSE) ||
+        (ff_type == id_DFFNP && adj_ff_type != id_DFFNC) || (ff_type == id_DFFNC && adj_ff_type != id_DFFNP) ||
+        (ff_type == id_DFFNPE && adj_ff_type != id_DFFNCE) ||
+        (ff_type == id_DFFNCE && adj_ff_type != id_DFFNPE));
 }
 
 // placement validation
@@ -534,6 +549,31 @@ bool GowinImpl::dsp_valid(Loc l, IdString bel_type, bool explain_invalid) const
     }
     return true;
 }
+
+bool GowinImpl::hclk_valid(Loc loc, IdString bel_type) const {
+
+    //check if the dummy buffer has been used
+    // log_info("HCLK VALID\n");
+    if (bel_type == id_CLKDIV){
+        int dummy_buf_z; 
+        if (loc.z == BelZ::CLKDIV_0_Z || loc.z==BelZ::CLKDIV_1_Z)
+            dummy_buf_z = BelZ::DUMMY_CLKDIV_CLKOUT_BUF_0_Z; 
+        else if (loc.z == BelZ::CLKDIV_2_Z || loc.z==BelZ::CLKDIV_3_Z)
+            dummy_buf_z = BelZ::DUMMY_CLKDIV_CLKOUT_BUF_1_Z;
+        else
+            return false;
+        
+        CellInfo *clkdiv_ci = ctx->getBoundBelCell(ctx->getBelByLocation(loc));
+        CellInfo *dummy_ci = ctx->getBoundBelCell(ctx->getBelByLocation(Loc(loc.x, loc.y, dummy_buf_z)));
+
+        if ((dummy_ci != nullptr) && dummy_ci->ports.at(id_CLKIN).net->driver.cell == clkdiv_ci) {
+            return true; 
+        }
+    }
+    // log_info("HCLK VALID END\n");
+    return false; 
+}
+
 
 bool GowinImpl::slice_valid(int x, int y, int z) const
 {
