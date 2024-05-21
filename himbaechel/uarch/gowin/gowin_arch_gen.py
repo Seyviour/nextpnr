@@ -175,6 +175,20 @@ class ChipExtraData(BBAStruct):
         self.bottom_io.serialise(f"{context}_bottom_io", bba)
         bba.slice(f"{context}_diff_io_types", len(self.diff_io_types))
 
+@dataclass
+class PadExtraData(BBAStruct):
+    # Which PLL does this pad belong to.
+    pll_tile: IdString
+    pll_bel:  IdString
+    pll_type: IdString
+
+    def serialise_lists(self, context: str, bba: BBAWriter):
+        pass
+    def serialise(self, context: str, bba: BBAWriter):
+        bba.u32(self.pll_tile.index)
+        bba.u32(self.pll_bel.index)
+        bba.u32(self.pll_type.index)
+
 # Unique features of the tiletype
 class TypeDesc:
     def __init__(self, dups, tiletype = '', extra_func = None, sfx = 0):
@@ -594,14 +608,17 @@ def create_tiletype(create_func, chip: Chip, db: chipdb, x: int, y: int, ttyp: i
     create_switch_matrix(tt, db, x, y)
     chip.set_tile_type(x, y, tdesc.tiletype)
 
-def add_port_wire(tt, bel, portmap, name, wire_type, port_type):
+def add_port_wire(tt, bel, portmap, name, wire_type, port_type, pin_name = None):
     wire = portmap[name]
     if not tt.has_wire(wire):
         if name.startswith('CLK'):
             tt.create_wire(wire, "TILE_CLK")
         else:
             tt.create_wire(wire, wire_type)
-    tt.add_bel_pin(bel, name, wire, port_type)
+    if pin_name:
+        tt.add_bel_pin(bel, pin_name, wire, port_type)
+    else:
+        tt.add_bel_pin(bel, name, wire, port_type)
 
 def create_null_tiletype(chip: Chip, db: chipdb, x: int, y: int, ttyp: int, tdesc: TypeDesc):
     typename = "NULL"
@@ -949,6 +966,11 @@ def create_dsp_tiletype(chip: Chip, db: chipdb, x: int, y: int, ttyp: int, tdesc
     portmap = db.grid[y][x].bels[belname].portmap
     dsp = tt.create_bel(belname, "MULT36X36", MULT36X36_Z)
 
+    # LSB 18x18 multipliers sign ports must be zero
+    add_port_wire(tt, dsp, db.grid[y][x].bels['MULT18X1800'].portmap, 'ASIGN', "DSP_I", PinType.INPUT, 'ZERO_ASIGN0')
+    add_port_wire(tt, dsp, db.grid[y][x].bels['MULT18X1800'].portmap, 'BSIGN', "DSP_I", PinType.INPUT, 'ZERO_BSIGN0')
+    add_port_wire(tt, dsp, db.grid[y][x].bels['MULT18X1801'].portmap, 'BSIGN', "DSP_I", PinType.INPUT, 'ZERO_BSIGN1')
+    add_port_wire(tt, dsp, db.grid[y][x].bels['MULT18X1810'].portmap, 'ASIGN', "DSP_I", PinType.INPUT, 'ZERO_ASIGN1')
     for i in range(2):
         for sfx in {'A', 'B'}:
             for inp in range(36):
@@ -1104,6 +1126,15 @@ def create_pll_tiletype(chip: Chip, db: chipdb, x: int, y: int, ttyp: int, tdesc
     tdesc.tiletype = tiletype
     return tt
 
+# add Pll's bel to the pad
+def add_pll(chip: Chip, db: chipdb, pad: PadInfo, ioloc: str):
+    try:
+        if ioloc in db.pad_pll:
+            row, col, ttyp, bel_name = db.pad_pll[ioloc]
+            pad.extra_data = PadExtraData(chip.strs.id(f'X{col}Y{row}'), chip.strs.id(bel_name), chip.strs.id(ttyp))
+    except:
+        return
+
 # pinouts, packages...
 _tbrlre = re.compile(r"IO([TBRL])(\d+)(\w)")
 def create_packages(chip: Chip, db: chipdb):
@@ -1140,6 +1171,8 @@ def create_packages(chip: Chip, db: chipdb):
             pad_func = pad_func.rstrip('/')
             bank = int(db.pin_bank[io_loc])
             pad = pkg.create_pad(pinno, tile, bel, pad_func, bank)
+            # add PLL if any is connected
+            add_pll(chip, db, pad, io_loc)
 
 # Extra chip data
 def create_extra_data(chip: Chip, db: chipdb, chip_flags: int):

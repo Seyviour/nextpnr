@@ -29,7 +29,7 @@
 
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/join.hpp>
-#include <boost/filesystem/convenience.hpp>
+#include <boost/filesystem/path.hpp>
 #include <boost/program_options.hpp>
 #include <fstream>
 #include <iostream>
@@ -61,7 +61,7 @@
 #include <unistd.h>
 #endif
 
-#ifdef __FreeBSD__
+#if defined(__FreeBSD__) || defined(__NetBSD__)
 #include <sys/sysctl.h>
 #endif
 
@@ -90,10 +90,14 @@ std::string proc_self_dirname()
         buflen--;
     return std::string(path, buflen);
 }
-#elif defined(__FreeBSD__)
+#elif defined(__FreeBSD__) || defined(__NetBSD__)
 std::string proc_self_dirname()
 {
+#ifdef __NetBSD__
+    int mib[4] = {CTL_KERN, KERN_PROC_ARGS, getpid(), KERN_PROC_PATHNAME};
+#else
     int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1};
+#endif
     size_t buflen;
     char *buffer;
     std::string path;
@@ -193,7 +197,7 @@ void init_share_dirname()
         npnr_share_dirname = proc_share_path;
         return;
     }
-    proc_share_path = proc_self_path + "..\\share\\";
+    proc_share_path = proc_self_path + "..\\share\\" + "nextpnr\\";
     if (check_file_exists(proc_share_path, true)) {
         npnr_share_dirname = proc_share_path;
         return;
@@ -385,6 +389,9 @@ po::options_description CommandHandler::getGeneralOptions()
                           "allow placer to attempt up to max(10000, total cells^2 / N) iterations to place a cell (int "
                           "N, default: 8, 0 for no timeout)");
 
+    general.add_options()("static-dump-density", "write density csv files during placer-static flow");
+
+
 #if !defined(NPNR_DISABLE_THREADS)
     general.add_options()("parallel-refine", "use new experimental parallelised engine for placement refinement");
 #endif
@@ -538,6 +545,10 @@ void CommandHandler::setupContext(Context *ctx)
 
     if (vm.count("router2-alt-weights"))
         ctx->settings[ctx->id("router2/alt-weights")] = true;
+
+    if (vm.count("static-dump-density"))
+        ctx->settings[ctx->id("static/dump_density")] = true;
+
 
     // Setting default values
     if (ctx->settings.find(ctx->id("target_freq")) == ctx->settings.end())
