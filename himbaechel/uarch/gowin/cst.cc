@@ -51,6 +51,49 @@ struct GowinCstReader
         return Loc(col - 1, row - 1, z);
     }
 
+    Loc getHclkLoc(std::smatch match, int maxX, int maxY){
+        log_info("here\n"); 
+        int bel_z;
+        std::string side = match[2].str(); 
+        int idx = std::stoi(match[3]);
+
+        bel_z = BelZ::DUMMY_CLKDIV_CLKOUT_BUF_0_Z + idx; 
+
+        Loc ret_loc = Loc(-1,-1, bel_z);
+
+        if (side == "TOP") {
+            ret_loc.y = 0;
+        } else if (side == "BOTTOM"){
+            ret_loc.y = maxY-1; 
+        } else if (side == "LEFT"){
+            ret_loc.x = 0; 
+        } else if (side == "RIGHT"){
+            ret_loc.x = maxX-1; 
+        }
+        // log_info(side.data());
+        // log_info("here2\n"); 
+        if (side == "TOP" || side == "BOTTOM"){
+            for (ret_loc.x = 0; ret_loc.x < maxX; ret_loc.x++){
+                log_info("x%d\n", ret_loc.x); 
+                if (ctx->getBelByLocation(ret_loc) != BelId())
+                    return ret_loc;
+            }
+        }
+
+        if (side == "RIGHT" || side == "LEFT"){
+            for (ret_loc.y = 0; ret_loc.y < maxY; ret_loc.y++){
+                log_info("Y%d\n", ret_loc.y);
+                if (ctx->getBelByLocation(ret_loc) != BelId())
+                    return ret_loc; 
+            }
+        }
+
+        return Loc(); 
+
+
+    }
+
+
     bool run(void)
     {
         pool<std::pair<IdString, IdStringList>> constrained_cells;
@@ -71,6 +114,7 @@ struct GowinCstReader
             std::regex iobelre = std::regex("IO([TRBL])([0-9]+)\\[?([A-Z])\\]?");
             std::regex inslocre =
                     std::regex("INS_LOC +\"([^\"]+)\" +R([0-9]+)C([0-9]+)\\[([0-9])\\]\\[([AB])\\] *;.*[\\s\\S]*");
+            std::regex hclkre = std::regex("INS_LOC +\"([^\"]+)\" +(TOP|RIGHT|BOTTOM|LEFT)SIDE\\[([0,1])\\] *;*[\\s\\S]*");
             std::regex clockre = std::regex("CLOCK_LOC +\"([^\"]+)\" +BUF([GS])(\\[([0-7])\\])?[^;]*;.*[\\s\\S]*");
             std::smatch match, match_attr, match_pinloc;
             std::string line, pinline;
@@ -79,7 +123,8 @@ struct GowinCstReader
                 ioloc,
                 ioport,
                 insloc,
-                clock
+                clock,
+                hclk
             } cst_type;
 
             while (!in.eof()) {
@@ -95,10 +140,14 @@ struct GowinCstReader
                             if (std::regex_match(line, match, inslocre)) {
                                 cst_type = insloc;
                             } else {
-                                if ((!line.empty()) && (line.rfind("//", 0) == std::string::npos)) {
-                                    log_warning("Invalid constraint: %s\n", line.c_str());
-                                }
+                                if(std::regex_match(line, match, hclkre)) {
+                                    cst_type = hclk;
+                                } else {
+                                    if ((!line.empty()) && (line.rfind("//", 0) == std::string::npos)) {
+                                        log_warning("Invalid constraint: %s\n", line.c_str());
+                                    }
                                 continue;
+                                }
                             }
                         }
                     }
@@ -166,6 +215,20 @@ struct GowinCstReader
                         }
                     }
                 } break;
+                case hclk: {
+                    log_info("Parsing HCLK constraint"); 
+                    IdString cell_type = it->second->type; 
+                    if (cell_type != IdString(ID_CLKDIV)) {
+                        log_error("Unsupported or invalid cell type %s for hclk\n", cell_type.c_str(ctx)); 
+                    }
+                    Loc hclk_loc = getHclkLoc(match, ctx->getGridDimX(), ctx->getGridDimY());
+                    BelId hclk_bel = ctx->getBelByLocation(hclk_loc);
+                    if (hclk_bel != BelId()){
+                        it->second->setAttr(IdString(ID_BEL), std::string(ctx->nameOfBel(hclk_bel))); 
+                    } else {
+                        log_error("No Bel of type %s found at specified location\n", IdString(ID_CLKDIV).c_str(ctx));
+                    }
+                } break; 
                 default: { // IO_PORT attr=value
                     std::string attr_val = match[2];
                     while (std::regex_match(attr_val, match_attr, port_attrre)) {
