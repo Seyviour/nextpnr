@@ -1,3 +1,4 @@
+import copy
 from os import path
 import sys
 
@@ -6,6 +7,8 @@ import pickle
 import gzip
 import re
 import argparse
+import itertools
+import collections
 
 sys.path.append(path.join(path.dirname(__file__), "../.."))
 from himbaechel_dbgen.chip import *
@@ -87,6 +90,21 @@ ALU54D_1_Z       = 556 + 3
 MULTALU18X18_1_Z = 560
 MULTALU36X18_1_Z = 560 + 1
 MULTADDALU18X18_1_Z = 560 + 2
+
+
+CLKDIV2_0_Z = 610
+CLKDIV2_1_Z = 611
+CLKDIV2_2_Z = 612
+CLKDIV2_3_Z = 613
+
+CLKDIV_0_Z = 620
+CLKDIV_1_Z = 621
+CLKDIV_2_Z = 622
+CLKDIV_3_Z = 623
+
+DUMMY_CLKDIV_CLKOUT_BUF_0_Z = 630
+DUMMY_CLKDIV_CLKOUT_BUF_1_Z = 631
+
 
 # =======================================
 # Chipdb additional info
@@ -246,6 +264,10 @@ def create_nodes(chip: Chip, db: chipdb):
             # VCC and VSS sources in the all tiles
             global_nodes.setdefault('GND', []).append(NodeWire(x, y, 'VSS'))
             global_nodes.setdefault('VCC', []).append(NodeWire(x, y, 'VCC'))
+        
+    for node in clkdiv_nodes:
+        # print(node)
+        chip.add_node(node)
 
     # add nodes from the apicula db
     for node_name, node_hdr in db.nodes.items():
@@ -289,6 +311,7 @@ def create_switch_matrix(tt: TileType, db: chipdb, x: int, y: int):
                 tt.create_wire(src, "GLOBAL_CLK")
             tt.create_pip(src, dst)
 
+clkdiv_nodes = []
 def create_hclk_switch_matrix(tt: TileType, db: chipdb, x: int, y: int):
     if (y, x) not in db.hclk_pips:
         return
@@ -300,6 +323,170 @@ def create_hclk_switch_matrix(tt: TileType, db: chipdb, x: int, y: int):
             if not tt.has_wire(src):
                 tt.create_wire(src, "HCLK")
             tt.create_pip(src, dst)
+    
+
+    hclk_pips = db.hclk_pips[y,x]
+    tile_hclk_sections  = [("HCLK_IN0" in hclk_pips), ("HCLK_IN2" in hclk_pips)]
+    has_hclk = any(tile_hclk_sections)
+
+    side = None
+    if (x == 0):
+        side = "L"
+    elif (x == db.cols-1):
+        side = "R"
+    elif (y == 0):
+        side = "T"
+    elif (y == db.rows-1):
+        side = "B"
+
+    #Nothing left to do here
+    if side is None or not has_hclk:
+        return
+
+    #hs->hclk_section
+    for hs in range(len(tile_hclk_sections)):
+        if not tile_hclk_sections[hs]:
+            continue
+
+        # input_wires = [f"HCLK_IN{hs*2}", f"HCLK_IN{hs*2+1}"]
+        # inter_wires = [f"HCLK_OUT{hs*2}", f"HCLK_OUT{hs*2+1}"]
+        # output_wires = [f"ECLK{hs*2}", f"ECLK{hs*2+1}"]
+
+        DUMMY_SUFFIX = "_HCLK_DUMMY"
+        # bel_data = []
+
+        BelDataTuple = collections.namedtuple("BelDataTuple", ["bel_name", "bel_type", "bel_z", "bel_pins"])
+        if hs == 0:
+            # tuple (bel_name, bel_type, bel_z, (bel_pin, wire, direction))
+            idx = hs*2
+            clkdiv_A_bel_data = BelDataTuple(f"CLKDIV_{idx}", "CLKDIV", CLKDIV_0_Z,
+                                 [("HCLKIN", f"HCLKIN_CLKDIV_{idx}{DUMMY_SUFFIX}", PinType.INPUT), ("CALIB", "C0", PinType.INPUT),
+                                 ("RESETN", "B0", PinType.INPUT), ("CLKOUT", f"CLKOUT_CLKDIV_{idx}{DUMMY_SUFFIX}", PinType.OUTPUT)]
+                                 )
+
+            clkdiv2_A_bel_data = BelDataTuple(f"CLKDIV2_{idx}", "CLKDIV2", CLKDIV2_0_Z,
+                                 [("HCLKIN", f"HCLKIN_CLKDIV2_{idx}{DUMMY_SUFFIX}", PinType.INPUT), ("RESETN", "A4", PinType.INPUT),
+                                 ("CLKOUT", f"CLKOUT_CLKDIV2_{idx}{DUMMY_SUFFIX}", PinType.OUTPUT)]
+                                 )
+            
+            idx = hs*2+1
+            clkdiv_B_bel_data = BelDataTuple(f"CLKDIV_{idx}", "CLKDIV", CLKDIV_1_Z,
+                                 [("HCLKIN", f"HCLKIN_CLKDIV_{idx}{DUMMY_SUFFIX}", PinType.INPUT), ("CALIB", "C0", PinType.INPUT),
+                                 ("RESETN", "B0", PinType.INPUT), ("CLKOUT", f"CLKOUT_CLKDIV_{idx}{DUMMY_SUFFIX}", PinType.OUTPUT)]
+                                 )
+
+      
+            clkdiv2_B_bel_data = BelDataTuple(F"CLKDIV2_{idx}", "CLKDIV2", CLKDIV2_1_Z,
+                                 [("HCLKIN", f"HCLKIN_CLKDIV2_{idx}{DUMMY_SUFFIX}", PinType.INPUT), ("RESETN", "B4", PinType.INPUT),
+                                 ("CLKOUT", f"CLKOUT_CLKDIV2_{idx}{DUMMY_SUFFIX}", PinType.OUTPUT)]
+                                 )
+        
+        elif hs == 1:
+            # tuple (bel_pin, wire, direction)
+            dummy = "_NODE" + DUMMY_SUFFIX if not tile_hclk_sections[0] else ""
+            idx = hs*2
+            clkdiv_A_bel_data = BelDataTuple(f"CLKDIV_{idx}", "CLKDIV", CLKDIV_2_Z,
+                                 [("HCLKIN", f"HCLKIN_CLKDIV_{idx}{DUMMY_SUFFIX}", PinType.INPUT), ("CALIB", "C5"+dummy, PinType.INPUT),
+                                 ("RESETN", "B5"+dummy, PinType.INPUT), ("CLKOUT", f"CLKOUT_CLKDIV_{idx}{DUMMY_SUFFIX}", PinType.OUTPUT)]
+                                 )
+
+            clkdiv2_A_bel_data = BelDataTuple(f"CLKDIV2_{idx}", "CLKDIV2", CLKDIV2_2_Z,
+                                  [("HCLKIN", f"HCLKIN_CLKDIV2_{idx}{DUMMY_SUFFIX}", PinType.INPUT), ("RESETN", "A1"+dummy, PinType.INPUT),
+                                  ("CLKOUT", f"CLKOUT_CLKDIV2_{idx}{DUMMY_SUFFIX}", PinType.OUTPUT)]
+                                  )
+            
+            idx = hs*2+1
+            clkdiv_B_bel_data = BelDataTuple(f"CLKDIV_{idx}", "CLKDIV", CLKDIV_3_Z,
+                                 [("HCLKIN", f"HCLKIN_CLKDIV_{idx}{DUMMY_SUFFIX}", PinType.INPUT), ("CALIB", "C5"+dummy, PinType.INPUT),
+                                 ("RESETN", "B5"+dummy, PinType.INPUT), ("CLKOUT", f"CLKOUT_CLKDIV_{idx}{DUMMY_SUFFIX}", PinType.OUTPUT)]
+                                 )
+            
+            clkdiv2_B_bel_data = BelDataTuple(f"CLKDIV2_{idx}", "CLKDIV2", CLKDIV2_3_Z,
+                                  [("HCLKIN", f"HCLKIN_CLKDIV2_{idx}{DUMMY_SUFFIX}", PinType.INPUT), ("RESETN", "C1"+dummy, PinType.INPUT),
+                                  ("CLKOUT", f"CLKOUT_CLKDIV2_{idx}{DUMMY_SUFFIX}", PinType.OUTPUT)] 
+                                  )
+
+        else:
+            continue
+            
+        #apicula coordinates are (row, column), which translates to (y, x)
+        if side in "TB":
+            secondary_loc = (x-1, y)
+        elif side in "LR":
+            secondary_loc = (x, y-1)
+        else:
+            break
+
+        dummy_wire_type = "HCLK_DUMMY_WIRE"
+        for bel_data in [clkdiv2_A_bel_data, clkdiv_A_bel_data, clkdiv2_B_bel_data, clkdiv_B_bel_data]:
+            for pin, wirename, direction in bel_data.bel_pins:
+                #create missing wires
+                if not tt.has_wire(wirename):
+                    wt = dummy_wire_type if wirename.endswith(DUMMY_SUFFIX) else "HCLK"
+                    tt.create_wire(wirename, wt)
+                    #Add secondary nodes
+                    if wirename.endswith("_NODE" + DUMMY_SUFFIX):
+                        # wire is connected to a different tile at the secondary location
+                        secondary_wire = wirename[:-len("_NODE"+DUMMY_SUFFIX)]
+                        clkdiv_nodes.append([NodeWire(x, y, wirename), NodeWire(*secondary_loc, secondary_wire)])
+            
+            this_bel = tt.create_bel(bel_data.bel_name, bel_data.bel_type, bel_data.bel_z)
+            for pin, wirename, direction in bel_data.bel_pins:
+                tt.add_bel_pin(this_bel, pin, wirename, direction)
+            
+
+        #We pretend there are two CLKDIVS rather than one, to aid routing :)
+        #
+        #This "deception" is necessary because of how (I suspect) the HCLK, and specifically CLKDIV works: 
+        #if a `section`` of HCLK passes an input to the CLKDIV, then it must "receive" it. E.g. 
+        #if the input to CLKDIV comes from SECTION_MUX0(HCLK_OUT0 or CLKOUT_CLKDIV2_0), 
+        #then the output of CLKDIV MUST go to ECLK0, and never to ECLK1.
+        # 
+        #Pretending there are two CLKDIVS is the first part of our little deception.
+        #The second part is to attach a dummy CLKDIV_OUT_BUFFER bel to CLKDIV during `packing`.
+        #Since there will be only one of these dummy buffers in a tile, nextpnr will be able to 
+        #place only one CLKDIV in a tile successfully ;) 
+
+        dummy_clkout_bel = tt.create_bel(f"DUMMY_CLKDIV_CLKOUT_BUF{hs}", "DUMMY_CLKDIV_CLKOUT_BUF", DUMMY_CLKDIV_CLKOUT_BUF_0_Z+hs)
+        dummy_bel_in_wire_name = f"CLKDIV_CLKOUT_BUF_IN{hs}{DUMMY_SUFFIX}"
+        dummy_bel_in = tt.create_wire(dummy_bel_in_wire_name, dummy_wire_type)
+        dummy_bel_out_wire_name = f"CLKDIV_CLKOUT_BUF_OUT{hs}{DUMMY_SUFFIX}"
+        dummy_bel_out = tt.create_wire(dummy_bel_out_wire_name, dummy_wire_type)
+
+        
+        tt.add_bel_pin(dummy_clkout_bel, "CLKIN", dummy_bel_in_wire_name, PinType.INPUT)
+        tt.add_bel_pin(dummy_clkout_bel, "CLKOUT", dummy_bel_out_wire_name, PinType.OUTPUT)
+
+        clkdiv_out_node = f"{side}HCLK{hs}_CLKDIV_CLKOUT" #from apicula
+
+        # print(db.nodes[clkdiv_out_node])
+
+        db.nodes.setdefault(clkdiv_out_node, ('GLOBAL_CLK', set()))[1].add((y,x,dummy_bel_out_wire_name))
+        # print(db.nodes[clkdiv_out_node])
+
+
+        
+        for idx in [2*hs, 2*hs+1]:
+            #Pips from HCLK_OUTx to HCLKIN_CLKDIV2
+            # print(f"HCLK_OUT{idx}",  f"HCLKIN_CLKDIV2_{idx}")
+            tt.create_pip(f"HCLK_OUT{idx}",  f"HCLKIN_CLKDIV2_{idx}{DUMMY_SUFFIX}")
+
+            #For convenience, should also help with bitstream generation
+            section_mux_wire_name = F"SECTION_MUX{idx}{DUMMY_SUFFIX}"
+            section_mux = tt.create_wire(section_mux_wire_name, dummy_wire_type)
+            tt.create_pip(f"HCLK_OUT{idx}", section_mux_wire_name)
+            tt.create_pip(f"CLKOUT_CLKDIV2_{idx}{DUMMY_SUFFIX}", section_mux_wire_name)
+
+            #connection to CLKDIV_IN
+            tt.create_pip(section_mux_wire_name, f"HCLKIN_CLKDIV_{idx}{DUMMY_SUFFIX}")
+
+            eclk_name = f"HCLK_FCLK{idx}"
+            eclk = tt.create_wire(eclk_name, "HCLKI")
+            tt.create_pip(f"CLKOUT_CLKDIV_{idx}{DUMMY_SUFFIX}", eclk_name)
+            tt.create_pip(section_mux_wire_name, eclk_name)
+            tt.create_pip(f"CLKOUT_CLKDIV_{idx}{DUMMY_SUFFIX}", dummy_bel_in_wire_name)
+            print(f"CLKOUT_CLKDIV_{idx}{DUMMY_SUFFIX}", dummy_bel_in_wire_name)
+
 
 def create_extra_funcs(tt: TileType, db: chipdb, x: int, y: int):
     if (y, x) not in db.extra_func:
@@ -973,6 +1160,24 @@ def main():
     device = args.device
     with gzip.open(importlib.resources.files("apycula").joinpath(f"{device}.pickle"), 'rb') as f:
         db = pickle.load(f)
+
+    # new_nodes = copy.deepcopy(db.nodes)
+    # for key in db.nodes.keys():
+    #     if 'HCLK_OUT' in key and 'BD' not in key:
+    #         # print(key.replace("HCLK_OUT", "ECLK"), cb.nodes[key], "\n"*2)
+    #         new_key = key.replace("HCLK_OUT", "ECLK") 
+    #         node_name, wires = db.nodes[key]
+    #         new_wires = {(x, y, g.replace("HCLK_OUT", "ECLK")) for (x, y, g)  in wires}
+    #         new_nodes[new_key] = (node_name, new_wires)
+    #         _ = new_nodes.pop(key)
+    # db.nodes = new_nodes
+
+    # new_hclk_pips = copy.deepcopy(db.hclk_pips) 
+    # for key, val in db.hclk_pips.items():
+    #     new_conns = {k: {(g.replace("HCLK_OUT", "ECLK") if "HCLK_OUT" in g else g):h for g,h in v.items()} for k, v in val.items() }
+    #     new_hclk_pips[key] = new_conns
+
+    # db.hclk_pips = new_hclk_pips
 
     chip_flags = 0;
     if device not in {"GW1NS-4", "GW1N-9"}:
