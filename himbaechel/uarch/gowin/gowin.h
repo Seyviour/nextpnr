@@ -54,6 +54,16 @@ inline bool type_is_bsram(IdString cell_type)
 }
 inline bool is_bsram(const CellInfo *cell) { return type_is_bsram(cell->type); }
 
+// Return true if a cell is CLKDIV
+inline bool type_is_clkdiv(IdString cell_type)
+{
+    return cell_type.in(id_CLKDIV); 
+}
+
+inline bool is_clkdiv(const CellInfo *cell){
+    return type_is_clkdiv(cell->type); 
+}
+
 // Return true if a cell is a DSP
 inline bool type_is_dsp(IdString cell_type)
 {
@@ -168,7 +178,21 @@ enum
     ALU54D_1_Z = 556 + 3,
     MULTALU18X18_1_Z = 560,
     MULTALU36X18_1_Z = 560 + 1,
-    MULTADDALU18X18_1_Z = 560 + 2
+    MULTADDALU18X18_1_Z = 560 + 2,
+
+    // HCLK Bels
+    CLKDIV2_0_Z = 610,
+    CLKDIV2_1_Z = 611,
+    CLKDIV2_2_Z = 612,
+    CLKDIV2_3_Z = 613,
+
+    CLKDIV_0_Z = 620,
+    CLKDIV_1_Z = 621,
+    CLKDIV_2_Z = 622,
+    CLKDIV_3_Z = 623,
+
+    DUMMY_CLKDIV_CLKOUT_BUF_0_Z = 630,
+    DUMMY_CLKDIV_CLKOUT_BUF_1_Z = 631
 };
 }
 
