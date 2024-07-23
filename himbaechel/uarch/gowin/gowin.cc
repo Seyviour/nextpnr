@@ -396,7 +396,7 @@ void GowinImpl::place_constrained_hclk_cells()
         if (chip.str(ctx) == "GW1N-9C") {
             auto ci = ctx->cells.at(constr_pair.second).get();
             for (auto cluster_child_cell : ci->constr_children)
-                if (cluster_child_cell->type == id_CLKDIV2 && options[-1] == option0) {
+                if (cluster_child_cell->type == id_CLKDIV2 && options.back() == option0) {
                     options.pop_back();
                     break;
                 }
